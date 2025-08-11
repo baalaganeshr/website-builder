@@ -10,9 +10,10 @@ from typing import AsyncGenerator, List, Dict, Any, Optional
 import httpx
 
 from config import OLLAMA_BASE_URL, OLLAMA_MODEL_NAME, SUPPORTED_OLLAMA_MODELS
-from llm import Completion
-from utils import print_prompt_summary
+from pydantic import BaseModel
 
+class Completion(BaseModel):
+    content: Optional[str] = None
 
 class OllamaConnectionError(Exception):
     """Raised when Ollama server is not accessible"""
@@ -24,8 +25,8 @@ class OllamaModelError(Exception):
     pass
 
 
-# Simple message type for compatibility
-ChatCompletionMessageParam = Dict[str, str]
+# Generic message type for LLM interactions
+ChatMessage = Dict[str, Any]
 
 
 class OllamaClient:
@@ -86,44 +87,32 @@ For the recommended models in this project, run:
             raise OllamaModelError(error_msg)
         return True
     
-    def _format_messages_for_ollama(self, messages: List[ChatCompletionMessageParam]) -> str:
+    def _format_messages_for_ollama(self, messages: List[ChatMessage]) -> str:
         """
-        Convert OpenAI-style messages to a single prompt string for Ollama.
-        Enhanced with better prompt engineering for web development tasks.
-        """        
+        Convert messages to a single prompt string for Ollama's /api/generate.
+        """
         prompt_parts = []
-        
         for message in messages:
             role = message.get("role", "user")
             content = message.get("content", "")
-            
+
+            # Basic handling for multimodal content, just extracting text
             if isinstance(content, list):
-                # Handle multimodal content (text + images)
-                text_parts = []
-                for item in content:
-                    if isinstance(item, dict):
-                        if item.get("type") == "text":
-                            text_parts.append(item.get("text", ""))
-                        elif item.get("type") == "image_url":
-                            # Enhanced image handling for better context
-                            text_parts.append("[IMAGE: Web UI Screenshot - Analyze layout, colors, components, and structure]")
-                content = " ".join(text_parts)
-            
-            if role == "system":
-                prompt_parts.append(f"System: {content}")
-            elif role == "user":
-                prompt_parts.append(f"User: {content}")
-            elif role == "assistant":
-                prompt_parts.append(f"Assistant: {content}")
-        
-        # Enhanced final instruction for web development
-        prompt_parts.append("Assistant: I'll create clean, professional web code based on the requirements. Let me generate:")
-        
+                text_content = " ".join(
+                    item.get("text", "")
+                    for item in content if isinstance(item, dict) and item.get("type") == "text"
+                )
+                content = text_content
+
+            prompt_parts.append(f"### {role.capitalize()}\n{content}")
+
+        # Add a final prompt for the assistant to start generating
+        prompt_parts.append("### Assistant\n")
         return "\n\n".join(prompt_parts)
-    
+
     async def generate_streaming_response(
         self,
-        messages: List[ChatCompletionMessageParam],
+        messages: List[ChatMessage],
         model_name: Optional[str] = None,
         temperature: float = 0.0,
         max_tokens: Optional[int] = None
@@ -146,8 +135,6 @@ For the recommended models in this project, run:
         # Convert messages to Ollama format  
         prompt = self._format_messages_for_ollama(messages)
         
-        # Print prompt summary for debugging
-        print_prompt_summary(messages)
         print(f"Using Ollama model: {model_name}")
         
         # Prepare request payload
@@ -206,7 +193,7 @@ For the recommended models in this project, run:
     
     async def generate_completion(
         self,
-        messages: List[ChatCompletionMessageParam],
+        messages: List[ChatMessage],
         model_name: Optional[str] = None,
         temperature: float = 0.0,
         max_tokens: Optional[int] = None
@@ -222,57 +209,5 @@ For the recommended models in this project, run:
         
         return Completion(content=full_response)
 
-    # Convenience wrapper to support prompt-based streaming used by prompt_manager
-    async def generate_stream(
-        self,
-        prompt: str,
-        model: Optional[str] = None,
-        system_prompt: Optional[str] = None,
-        temperature: float = 0.0,
-        max_tokens: Optional[int] = None,
-    ) -> AsyncGenerator[str, None]:
-        """
-        Stream generation given a plain prompt string, optionally with a system prompt.
-        This keeps backward compatibility with components expecting a simple prompt API.
-        """
-        messages: List[ChatCompletionMessageParam] = []
-        if system_prompt:
-            messages.append({"role": "system", "content": system_prompt})
-        messages.append({"role": "user", "content": prompt})
-
-        async for chunk in self.generate_streaming_response(
-            messages=messages,
-            model_name=model,
-            temperature=temperature,
-            max_tokens=max_tokens,
-        ):
-            yield chunk
-
-
-# Convenience functions for backward compatibility
-async def stream_ollama_response(*args, **kwargs):
-    """Backward compatibility wrapper"""
-    client = OllamaClient()
-    try:
-        async for chunk in client.generate_streaming_response(*args, **kwargs):
-            yield chunk
-    finally:
-        await client.close()
-
-
-async def check_ollama_connection() -> bool:
-    """Check if Ollama is accessible"""
-    client = OllamaClient()
-    try:
-        return await client.check_connection()
-    finally:
-        await client.close()
-
-
-async def list_ollama_models() -> List[str]:
-    """Get list of available Ollama models"""
-    client = OllamaClient()
-    try:
-        return await client.list_models()
-    finally:
-        await client.close()
+    # This convenience wrapper is no longer needed with the new prompt manager
+    # and can be removed. If streaming is needed again, it can be added back.
