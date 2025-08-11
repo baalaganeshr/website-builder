@@ -1,10 +1,13 @@
 from datetime import datetime
 import json
 import os
-from openai.types.chat import ChatCompletionMessageParam
+from typing import List, Dict, Any
+
+# Local type definition instead of OpenAI
+ChatCompletionMessageParam = Dict[str, Any]
 
 
-def write_logs(prompt_messages: list[ChatCompletionMessageParam], completion: str):
+def write_logs(prompt_messages: List[ChatCompletionMessageParam], completion: str):
     # Get the logs path from environment, default to the current working directory
     logs_path = os.environ.get("LOGS_PATH", os.getcwd())
 

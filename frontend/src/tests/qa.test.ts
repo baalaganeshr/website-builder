@@ -22,9 +22,9 @@ describe.skip("e2e tests", () => {
   const stacks = Object.values(Stack).slice(0, DEBUG ? 1 : undefined);
   const models = DEBUG
     ? [
-        CodeGenerationModel.OLLAMA_GPT_LOCAL,
+        // CodeGenerationModel.OLLAMA_GPT_LOCAL, // This model doesn't exist
         // Only local model available now
-      ]
+      ].filter(Boolean)
     : Object.values(CodeGenerationModel);
 
   beforeAll(async () => {

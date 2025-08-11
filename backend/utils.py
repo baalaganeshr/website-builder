@@ -1,7 +1,9 @@
 import copy
 import json
-from typing import List
-from openai.types.chat import ChatCompletionMessageParam
+from typing import List, Dict, Any
+
+# Simple message type for compatibility
+ChatCompletionMessageParam = Dict[str, Any]
 
 
 def pprint_prompt(prompt_messages: List[ChatCompletionMessageParam]):

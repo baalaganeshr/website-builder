@@ -6,9 +6,16 @@ load_dotenv()
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from routes import screenshot, generate_code, home, evals
+from routes import screenshot, generate_code, home, evals, ollama_api
 
-app = FastAPI(openapi_url=None, docs_url=None, redoc_url=None)
+app = FastAPI(
+    title="Website Builder API",
+    description="AI-powered website builder with Ollama integration",
+    version="1.0.0",
+    openapi_url="/api/openapi.json" if not __import__("config").IS_PROD else None,
+    docs_url="/api/docs" if not __import__("config").IS_PROD else None,
+    redoc_url="/api/redoc" if not __import__("config").IS_PROD else None,
+)
 
 # Configure CORS settings
 app.add_middleware(
@@ -19,8 +26,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Add routes
-app.include_router(generate_code.router)
-app.include_router(screenshot.router)
-app.include_router(home.router)
-app.include_router(evals.router)
+# Add routes - new Ollama API first for priority
+app.include_router(ollama_api.router, prefix="/api/ollama", tags=["ollama"])
+app.include_router(generate_code.router, prefix="/api", tags=["legacy"])
+app.include_router(screenshot.router, prefix="/api", tags=["screenshot"])
+app.include_router(home.router, prefix="/api", tags=["home"])
+app.include_router(evals.router, prefix="/api", tags=["evaluations"])

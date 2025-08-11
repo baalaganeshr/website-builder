@@ -1,5 +1,8 @@
-from typing import Union, Any, cast
-from openai.types.chat import ChatCompletionMessageParam, ChatCompletionContentPartParam
+from typing import Union, Any, cast, Dict, List
+
+# Simple message type for compatibility without OpenAI dependency
+ChatCompletionMessageParam = Dict[str, Any]
+ChatCompletionContentPartParam = Dict[str, Any]
 
 from custom_types import InputMode
 from image_generation.core import create_alt_url_mapping

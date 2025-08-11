@@ -4,7 +4,7 @@ from abc import ABC, abstractmethod
 import traceback
 from typing import Callable, Awaitable
 from fastapi import APIRouter, WebSocket
-import openai
+# Removed OpenAI import - using local Ollama only
 from codegen.utils import extract_html_content
 from config import (
     ANTHROPIC_API_KEY,
@@ -60,7 +60,8 @@ from typing import (
     cast,
     get_args,
 )
-from openai.types.chat import ChatCompletionMessageParam
+# Use local type definition instead of OpenAI
+ChatCompletionMessageParam = Dict[str, Any]
 
 from utils import print_prompt_summary
 
@@ -682,11 +683,25 @@ class ParallelGenerationStage:
                 callback=lambda x: self._process_chunk(x, index),
                 model_name=model_name,
             )
-        except openai.AuthenticationError as e:
-            print(f"[VARIANT {index + 1}] OpenAI Authentication failed", e)
-            error_message = (
-                "Incorrect OpenAI key. Please make sure your OpenAI API key is correct, "
-                "or create a new OpenAI API key on your OpenAI dashboard."
+        except Exception as e:  # Generic exception for local models
+            if "authentication" in str(e).lower():
+                print(f"[VARIANT {index + 1}] Authentication failed", e)
+                error_message = (
+                    "Authentication failed. Please check your API configuration."
+                )
+                await self.context.send_message("variantError", error_message, index)
+                raise VariantErrorAlreadySent(e)
+            elif "not found" in str(e).lower():
+                print(f"[VARIANT {index + 1}] Model not found", e)
+                error_message = (
+                    f"Model '{model_name}' not found. Please check if the model is available."
+                )
+                await self.context.send_message("variantError", error_message, index)
+                raise VariantErrorAlreadySent(e)
+            elif "rate limit" in str(e).lower():
+                print(f"[VARIANT {index + 1}] Rate limit exceeded", e)
+                error_message = (
+                    "Rate limit exceeded. Please try again later."
                 + (
                     " Alternatively, you can purchase code generation credits directly on this website."
                     if IS_PROD
@@ -695,32 +710,10 @@ class ParallelGenerationStage:
             )
             await self.send_message("variantError", error_message, index)
             raise VariantErrorAlreadySent(e)
-        except openai.NotFoundError as e:
-            print(f"[VARIANT {index + 1}] OpenAI Model not found", e)
-            error_message = (
-                e.message
-                + ". Please make sure you have followed the instructions correctly to obtain "
-                "an OpenAI key with GPT vision access: "
-                "https://github.com/abi/screenshot-to-code/blob/main/Troubleshooting.md"
-                + (
-                    " Alternatively, you can purchase code generation credits directly on this website."
-                    if IS_PROD
-                    else ""
-                )
-            )
-            await self.send_message("variantError", error_message, index)
-            raise VariantErrorAlreadySent(e)
-        except openai.RateLimitError as e:
-            print(f"[VARIANT {index + 1}] OpenAI Rate limit exceeded", e)
-            error_message = (
-                "OpenAI error - 'You exceeded your current quota, please check your plan and billing details.'"
-                + (
-                    " Alternatively, you can purchase code generation credits directly on this website."
-                    if IS_PROD
-                    else ""
-                )
-            )
-            await self.send_message("variantError", error_message, index)
+        else:
+            # Any other exception
+            print(f"[VARIANT {index + 1}] Unexpected error", e)
+            await self.send_message("variantError", f"Unexpected error: {str(e)}", index)
             raise VariantErrorAlreadySent(e)
 
     async def _stream_ollama_with_error_handling(

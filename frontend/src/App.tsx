@@ -1,5 +1,6 @@
-import { useEffect, useRef } from "react";
-import { generateCode } from "./generateCode";
+import { useEffect, useRef, useState } from "react";
+import { generateCodeLocal as generateCode } from "./generateCodeLocal";
+import { HTTP_BACKEND_URL } from "./config";
 import SettingsDialog from "./components/settings/SettingsDialog";
 import { AppState, CodeGenerationParams, EditorTheme, Settings } from "./types";
 import { IS_RUNNING_ON_CLOUD } from "./config";
@@ -26,6 +27,26 @@ import { createCommit } from "./components/commits/utils";
 import GenerateFromText from "./components/generate-from-text/GenerateFromText";
 
 function App() {
+  // Simple connection state and local HTML test
+  const [backendOk, setBackendOk] = useState<boolean | null>(null);
+  const [testDescription, setTestDescription] = useState<string>("");
+  const [testResult, setTestResult] = useState<string>("");
+
+  useEffect(() => {
+    const check = async () => {
+      try {
+        console.log("Calling backend /api/test @", `${HTTP_BACKEND_URL}/api/test`);
+        const res = await fetch(`${HTTP_BACKEND_URL}/api/test`);
+        const data = await res.json();
+        console.log("/api/test response:", data);
+        setBackendOk(Boolean(data?.status === "ok"));
+      } catch (e) {
+        console.error("Backend connectivity check failed:", e);
+        setBackendOk(false);
+      }
+    };
+    check();
+  }, []);
   const {
     // Inputs
     inputMode,
@@ -73,7 +94,7 @@ function App() {
       isImageGenerationEnabled: true,
       editorTheme: EditorTheme.COBALT,
       generatedCodeConfig: Stack.HTML_TAILWIND,
-      codeGenerationModel: CodeGenerationModel.OLLAMA_GPT_LOCAL,
+      codeGenerationModel: CodeGenerationModel.LLAMA3_2_3B,
       // Only relevant for hosted version
       isTermOfServiceAccepted: false,
     },
@@ -84,12 +105,13 @@ function App() {
 
   // Code generation model from local storage or the default value
   const model =
-    settings.codeGenerationModel || CodeGenerationModel.OLLAMA_GPT_LOCAL;
+    settings.codeGenerationModel || CodeGenerationModel.LLAMA3_2_3B;
 
-  const showBetterModelMessage = false; // No need to show better model message for local model
+  const showBetterModelMessage = false; // Always false for local models
 
   const showSelectAndEditFeature =
-    model === CodeGenerationModel.OLLAMA_GPT_LOCAL &&
+    (model === CodeGenerationModel.LLAMA3_2_3B || 
+     model === CodeGenerationModel.GPT_OSS_20B) &&
     (settings.generatedCodeConfig === Stack.HTML_TAILWIND ||
       settings.generatedCodeConfig === Stack.HTML_CSS);
 
@@ -396,6 +418,54 @@ function App() {
           {/* {appState !== AppState.CODE_READY && <TipLink />} */}
 
           {IS_RUNNING_ON_CLOUD && !settings.openAiApiKey && <OnboardingNote />}
+
+          {/* Connectivity status */}
+          <div className="text-xs mt-2">
+            Backend: {backendOk === null ? "checking..." : backendOk ? "connected" : "not reachable"}
+          </div>
+
+          {/* Simple local HTML generation test */}
+          <div className="mt-3 p-3 border rounded">
+            <div className="font-medium mb-2">Quick Local Test (Ollama HTML)</div>
+            <input
+              className="w-full border rounded p-2 text-black"
+              placeholder="Describe a simple landing page..."
+              value={testDescription}
+              onChange={(e) => setTestDescription(e.target.value)}
+            />
+            <button
+              className="mt-2 px-3 py-1 border rounded"
+              onClick={async () => {
+                setTestResult("");
+                try {
+                  console.log("POST /api/ollama/generate/html", { description: testDescription });
+                  const res = await fetch(`${HTTP_BACKEND_URL}/api/ollama/generate/html`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ description: testDescription, additional_requirements: "", model_name: null }),
+                  });
+                  const data = await res.json();
+                  console.log("/generate/html response:", data);
+                  if (data?.success && data?.data?.html) {
+                    setTestResult(data.data.html);
+                  } else {
+                    setTestResult(`Error: ${data?.error || res.statusText}`);
+                  }
+                } catch (e: any) {
+                  console.error(e);
+                  setTestResult(`Request failed: ${e?.message || e}`);
+                }
+              }}
+            >
+              Generate HTML
+            </button>
+            <div className="mt-2 text-xs opacity-80">Logs in console</div>
+            {testResult && (
+              <div className="mt-3 border rounded bg-white text-black p-3 whitespace-pre-wrap overflow-auto max-h-72">
+                {testResult}
+              </div>
+            )}
+          </div>
 
           {appState === AppState.INITIAL && (
             <GenerateFromText doCreateFromText={doCreateFromText} />
