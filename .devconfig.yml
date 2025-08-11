@@ -1,0 +1,38 @@
+# Development Workflow Configuration
+
+name: Development
+
+# Environment setup
+on:
+  development:
+    branches: [ main, develop ]
+
+# Development tools configuration
+jobs:
+  setup:
+    runs-on: local
+    
+  frontend:
+    path: ./frontend
+    port: 5173
+    commands:
+      - npm install
+      - npm run dev
+    
+  backend:
+    path: ./backend  
+    port: 7001
+    commands:
+      - pip install -r requirements.txt
+      - python -m uvicorn main:app --reload --port 7001
+
+# Testing configuration  
+  testing:
+    frontend-tests: npm test
+    backend-tests: pytest
+    integration-tests: python tools/test_integration.py
+
+# Build configuration
+  build:
+    frontend: npm run build
+    docker: docker-compose up --build
