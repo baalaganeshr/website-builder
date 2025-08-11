@@ -1,14 +1,17 @@
-# Only import Ollama client since we're only using local models
-from .ollama_client import stream_ollama_response, check_ollama_connection, OllamaClient, OllamaConnectionError, OllamaModelError, list_ollama_models
-from llm import Completion
+# Only import what is needed for the simplified local-first setup
+from .ollama_client import (
+    OllamaClient,
+    OllamaConnectionError,
+    OllamaModelError,
+    Completion,
+    ChatMessage
+)
 
-# Re-export the functions for backward compatibility
+# Re-export for easy access in other parts of the application
 __all__ = [
-    "stream_ollama_response",
-    "check_ollama_connection",
-    "list_ollama_models",
     "OllamaClient",
     "OllamaConnectionError",
     "OllamaModelError",
-    "Completion"
+    "Completion",
+    "ChatMessage"
 ]

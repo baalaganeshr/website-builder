@@ -1,503 +1,198 @@
-import { useEffect, useRef, useState } from "react";
-import { generateCodeLocal as generateCode } from "./generateCodeLocal";
+import { useState, useEffect } from "react";
+import { Toaster, toast } from "react-hot-toast";
 import { HTTP_BACKEND_URL } from "./config";
-import SettingsDialog from "./components/settings/SettingsDialog";
-import { AppState, CodeGenerationParams, EditorTheme, Settings } from "./types";
-import { IS_RUNNING_ON_CLOUD } from "./config";
-import { PicoBadge } from "./components/messages/PicoBadge";
-import { OnboardingNote } from "./components/messages/OnboardingNote";
-import { usePersistedState } from "./hooks/usePersistedState";
-import TermsOfServiceDialog from "./components/TermsOfServiceDialog";
-import { USER_CLOSE_WEB_SOCKET_CODE } from "./constants";
-import { extractHistory } from "./components/history/utils";
-import toast from "react-hot-toast";
-import { Stack } from "./lib/stacks";
-import { CodeGenerationModel } from "./lib/models";
-import useBrowserTabIndicator from "./hooks/useBrowserTabIndicator";
-// import TipLink from "./components/messages/TipLink";
-import { useAppStore } from "./store/app-store";
-import { useProjectStore } from "./store/project-store";
-import Sidebar from "./components/sidebar/Sidebar";
-import PreviewPane from "./components/preview/PreviewPane";
-import DeprecationMessage from "./components/messages/DeprecationMessage";
-import { GenerationSettings } from "./components/settings/GenerationSettings";
-import StartPane from "./components/start-pane/StartPane";
-import { Commit } from "./components/commits/types";
-import { createCommit } from "./components/commits/utils";
-import GenerateFromText from "./components/generate-from-text/GenerateFromText";
+import { CodeGenerationModel } from "./lib/models"; // Using existing model definitions
+
+// Simplified component state
+type AppStatus = "initial" | "loading" | "ready" | "error";
 
 function App() {
-  // Simple connection state and local HTML test
-  const [backendOk, setBackendOk] = useState<boolean | null>(null);
-  const [testDescription, setTestDescription] = useState<string>("");
-  const [testResult, setTestResult] = useState<string>("");
+  const [description, setDescription] = useState<string>("");
+  const [model, setModel] = useState<CodeGenerationModel>(CodeGenerationModel.LLAMA3_2_3B);
+  const [generatedHtml, setGeneratedHtml] = useState<string>("");
+  const [generatedCss, setGeneratedCss] = useState<string>("");
+  const [status, setStatus] = useState<AppStatus>("initial");
+  const [error, setError] = useState<string>("");
+  const [backendHealth, setBackendHealth] = useState<boolean | null>(null);
 
+  // Check backend health on component mount
   useEffect(() => {
-    const check = async () => {
+    const checkHealth = async () => {
       try {
-        console.log("Calling backend /api/test @", `${HTTP_BACKEND_URL}/api/test`);
-        const res = await fetch(`${HTTP_BACKEND_URL}/api/test`);
-        const data = await res.json();
-        console.log("/api/test response:", data);
-        setBackendOk(Boolean(data?.status === "ok"));
-      } catch (e) {
-        console.error("Backend connectivity check failed:", e);
-        setBackendOk(false);
+        const response = await fetch(`${HTTP_BACKEND_URL}/api/ollama/health`);
+        if (response.ok) {
+          const data = await response.json();
+          setBackendHealth(data.status === "healthy");
+        } else {
+          setBackendHealth(false);
+        }
+      } catch (err) {
+        setBackendHealth(false);
       }
     };
-    check();
+    checkHealth();
   }, []);
-  const {
-    // Inputs
-    inputMode,
-    setInputMode,
-    isImportedFromCode,
-    setIsImportedFromCode,
-    referenceImages,
-    setReferenceImages,
-    initialPrompt,
-    setInitialPrompt,
 
-    head,
-    commits,
-    addCommit,
-    removeCommit,
-    setHead,
-    appendCommitCode,
-    setCommitCode,
-    resetCommits,
-    resetHead,
-    updateVariantStatus,
-    resizeVariants,
-
-    // Outputs
-    appendExecutionConsole,
-    resetExecutionConsoles,
-  } = useProjectStore();
-
-  const {
-    disableInSelectAndEditMode,
-    setUpdateInstruction,
-    updateImages,
-    setUpdateImages,
-    appState,
-    setAppState,
-  } = useAppStore();
-
-  // Settings
-  const [settings, setSettings] = usePersistedState<Settings>(
-    {
-      openAiApiKey: null,
-      openAiBaseURL: null,
-      anthropicApiKey: null,
-      screenshotOneApiKey: null,
-      isImageGenerationEnabled: true,
-      editorTheme: EditorTheme.COBALT,
-      generatedCodeConfig: Stack.HTML_TAILWIND,
-      codeGenerationModel: CodeGenerationModel.LLAMA3_2_3B,
-      // Only relevant for hosted version
-      isTermOfServiceAccepted: false,
-    },
-    "setting"
-  );
-
-  const wsRef = useRef<WebSocket>(null);
-
-  // Code generation model from local storage or the default value
-  const model =
-    settings.codeGenerationModel || CodeGenerationModel.LLAMA3_2_3B;
-
-  const showBetterModelMessage = false; // Always false for local models
-
-  const showSelectAndEditFeature =
-    (model === CodeGenerationModel.LLAMA3_2_3B || 
-     model === CodeGenerationModel.GPT_OSS_20B) &&
-    (settings.generatedCodeConfig === Stack.HTML_TAILWIND ||
-      settings.generatedCodeConfig === Stack.HTML_CSS);
-
-  // Indicate coding state using the browser tab's favicon and title
-  useBrowserTabIndicator(appState === AppState.CODING);
-
-  // When the user already has the settings in local storage, newly added keys
-  // do not get added to the settings so if it's falsy, we populate it with the default
-  // value
-  useEffect(() => {
-    if (!settings.generatedCodeConfig) {
-      setSettings((prev) => ({
-        ...prev,
-        generatedCodeConfig: Stack.HTML_TAILWIND,
-      }));
-    }
-  }, [settings.generatedCodeConfig, setSettings]);
-
-  // Functions
-  const reset = () => {
-    setAppState(AppState.INITIAL);
-    setUpdateInstruction("");
-    setUpdateImages([]);
-    disableInSelectAndEditMode();
-    resetExecutionConsoles();
-
-    resetCommits();
-    resetHead();
-
-    // Inputs
-    setInputMode("image");
-    setReferenceImages([]);
-    setIsImportedFromCode(false);
+  // Function to construct the preview HTML
+  const createPreviewHtml = () => {
+    if (!generatedHtml) return "";
+    return `
+      <!DOCTYPE html>
+      <html lang="en">
+      <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Generated Website</title>
+        <style>
+          body { font-family: sans-serif; }
+          ${generatedCss}
+        </style>
+      </head>
+      <body>
+        ${generatedHtml}
+      </body>
+      </html>
+    `;
   };
 
-  const regenerate = () => {
-    if (head === null) {
-      toast.error(
-        "No current version set. Please contact support via chat or Github."
-      );
-      throw new Error("Regenerate called with no head");
-    }
-
-    // Retrieve the previous command
-    const currentCommit = commits[head];
-    if (currentCommit.type !== "ai_create") {
-      toast.error("Only the first version can be regenerated.");
+  const handleGenerate = async () => {
+    if (!description.trim()) {
+      toast.error("Please enter a description for your website.");
       return;
     }
 
-    // Re-run the create
-    if (inputMode === "image" || inputMode === "video") {
-      doCreate(referenceImages, inputMode);
-    } else {
-      // TODO: Fix this
-      doCreateFromText(initialPrompt);
-    }
-  };
+    setStatus("loading");
+    setError("");
+    setGeneratedHtml("");
+    setGeneratedCss("");
 
-  // Used when the user cancels the code generation
-  const cancelCodeGeneration = () => {
-    wsRef.current?.close?.(USER_CLOSE_WEB_SOCKET_CODE);
-  };
+    try {
+      const response = await fetch(`${HTTP_BACKEND_URL}/api/ollama/generate/html`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          description: description,
+          model_name: model,
+        }),
+      });
 
-  // Used for code generation failure as well
-  const cancelCodeGenerationAndReset = (commit: Commit) => {
-    // When the current commit is the first version, reset the entire app state
-    if (commit.type === "ai_create") {
-      reset();
-    } else {
-      // Otherwise, remove current commit from commits
-      removeCommit(commit.hash);
-
-      // Revert to parent commit
-      const parentCommitHash = commit.parentHash;
-      if (parentCommitHash) {
-        setHead(parentCommitHash);
-      } else {
-        throw new Error("Parent commit not found");
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.detail || `HTTP error! Status: ${response.status}`);
       }
 
-      setAppState(AppState.CODE_READY);
+      const data = await response.json();
+      setGeneratedHtml(data.html);
+      setGeneratedCss(data.css);
+      setStatus("ready");
+      toast.success("Website generated successfully!");
+    } catch (err: any) {
+      setError(err.message || "An unknown error occurred.");
+      setStatus("error");
+      toast.error(err.message || "Failed to generate website.");
     }
   };
-
-  function doGenerateCode(params: CodeGenerationParams) {
-    // Reset the execution console
-    resetExecutionConsoles();
-
-    // Set the app state to coding during generation
-    setAppState(AppState.CODING);
-
-    // Merge settings with params
-    const updatedParams = { ...params, ...settings };
-
-    // Create variants dynamically - start with 4 to handle most cases
-    // Backend will use however many it needs (typically 3)
-    const baseCommitObject = {
-      variants: Array(4).fill(null).map(() => ({ code: "" })),
-    };
-
-    const commitInputObject =
-      params.generationType === "create"
-        ? {
-            ...baseCommitObject,
-            type: "ai_create" as const,
-            parentHash: null,
-            inputs: params.prompt,
-          }
-        : {
-            ...baseCommitObject,
-            type: "ai_edit" as const,
-            parentHash: head,
-            inputs: params.history
-              ? params.history[params.history.length - 1]
-              : { text: "", images: [] },
-          };
-
-    // Create a new commit and set it as the head
-    const commit = createCommit(commitInputObject);
-    addCommit(commit);
-    setHead(commit.hash);
-
-    generateCode(wsRef, updatedParams, {
-      onChange: (token, variantIndex) => {
-        appendCommitCode(commit.hash, variantIndex, token);
-      },
-      onSetCode: (code, variantIndex) => {
-        setCommitCode(commit.hash, variantIndex, code);
-      },
-      onStatusUpdate: (line, variantIndex) => appendExecutionConsole(variantIndex, line),
-      onVariantComplete: (variantIndex) => {
-        console.log(`Variant ${variantIndex} complete event received`);
-        updateVariantStatus(commit.hash, variantIndex, "complete");
-      },
-      onVariantError: (variantIndex, error) => {
-        console.error(`Error in variant ${variantIndex}:`, error);
-        updateVariantStatus(commit.hash, variantIndex, "error", error);
-      },
-      onVariantCount: (count) => {
-        console.log(`Backend is using ${count} variants`);
-        resizeVariants(commit.hash, count);
-      },
-      onCancel: () => {
-        cancelCodeGenerationAndReset(commit);
-      },
-      onComplete: () => {
-        setAppState(AppState.CODE_READY);
-      },
-    });
-  }
-
-  // Initial version creation
-  function doCreate(referenceImages: string[], inputMode: "image" | "video") {
-    // Reset any existing state
-    reset();
-
-    // Set the input states
-    setReferenceImages(referenceImages);
-    setInputMode(inputMode);
-
-    // Kick off the code generation
-    if (referenceImages.length > 0) {
-      doGenerateCode({
-        generationType: "create",
-        inputMode,
-        prompt: { text: "", images: [referenceImages[0]] },
-      });
-    }
-  }
-
-  function doCreateFromText(text: string) {
-    // Reset any existing state
-    reset();
-
-    setInputMode("text");
-    setInitialPrompt(text);
-    doGenerateCode({
-      generationType: "create",
-      inputMode: "text",
-      prompt: { text, images: [] },
-    });
-  }
-
-  // Subsequent updates
-  async function doUpdate(
-    updateInstruction: string,
-    selectedElement?: HTMLElement
-  ) {
-    if (updateInstruction.trim() === "") {
-      toast.error("Please include some instructions for AI on what to update.");
-      return;
-    }
-
-    if (head === null) {
-      toast.error(
-        "No current version set. Contact support or open a Github issue."
-      );
-      throw new Error("Update called with no head");
-    }
-
-    let historyTree;
-    try {
-      historyTree = extractHistory(head, commits);
-    } catch {
-      toast.error(
-        "Version history is invalid. This shouldn't happen. Please contact support or open a Github issue."
-      );
-      throw new Error("Invalid version history");
-    }
-
-    let modifiedUpdateInstruction = updateInstruction;
-
-    // Send in a reference to the selected element if it exists
-    if (selectedElement) {
-      modifiedUpdateInstruction =
-        updateInstruction +
-        " referring to this element specifically: " +
-        selectedElement.outerHTML;
-    }
-
-    const updatedHistory = [
-      ...historyTree,
-      { text: modifiedUpdateInstruction, images: updateImages },
-    ];
-
-    doGenerateCode({
-      generationType: "update",
-      inputMode,
-      prompt:
-        inputMode === "text"
-          ? { text: initialPrompt, images: [] }
-          : { text: "", images: [referenceImages[0]] },
-      history: updatedHistory,
-      isImportedFromCode,
-    });
-
-    setUpdateInstruction("");
-    setUpdateImages([]);
-  }
-
-  const handleTermDialogOpenChange = (open: boolean) => {
-    setSettings((s) => ({
-      ...s,
-      isTermOfServiceAccepted: !open,
-    }));
-  };
-
-  function setStack(stack: Stack) {
-    setSettings((prev) => ({
-      ...prev,
-      generatedCodeConfig: stack,
-    }));
-  }
-
-  function importFromCode(code: string, stack: Stack) {
-    // Reset any existing state
-    reset();
-
-    // Set input state
-    setIsImportedFromCode(true);
-
-    // Set up this project
-    setStack(stack);
-
-    // Create a new commit and set it as the head
-    const commit = createCommit({
-      type: "code_create",
-      parentHash: null,
-      variants: [{ code }],
-      inputs: null,
-    });
-    addCommit(commit);
-    setHead(commit.hash);
-
-    // Set the app state
-    setAppState(AppState.CODE_READY);
-  }
 
   return (
-    <div className="mt-2 dark:bg-black dark:text-white">
-      {IS_RUNNING_ON_CLOUD && <PicoBadge />}
-      {IS_RUNNING_ON_CLOUD && (
-        <TermsOfServiceDialog
-          open={!settings.isTermOfServiceAccepted}
-          onOpenChange={handleTermDialogOpenChange}
-        />
-      )}
-      <div className="lg:fixed lg:inset-y-0 lg:z-40 lg:flex lg:w-96 lg:flex-col">
-        <div className="flex grow flex-col gap-y-2 overflow-y-auto border-r border-gray-200 bg-white px-6 dark:bg-zinc-950 dark:text-white">
-          {/* Header with access to settings */}
-          <div className="flex items-center justify-between mt-10 mb-2">
-            <h1 className="text-2xl ">Screenshot to Code</h1>
-            <SettingsDialog settings={settings} setSettings={setSettings} />
-          </div>
+    <>
+      <Toaster position="top-center" />
+      <div className="flex h-screen bg-zinc-900 text-white">
+        {/* Control Panel */}
+        <div className="w-1/3 max-w-lg p-6 space-y-6 overflow-y-auto border-r border-zinc-700">
+          <header>
+            <h1 className="text-3xl font-bold">Local AI Website Builder</h1>
+            <p className="text-zinc-400 mt-2">
+              Describe the website you want to create, and let a local Ollama model build it for you.
+            </p>
+            <div className="text-xs mt-3">
+              Backend status: {backendHealth === null ? "checking..." : backendHealth ?
+              <span className="text-green-400">connected</span> :
+              <span className="text-red-400">disconnected</span>}
+            </div>
+          </header>
 
-          {/* Generation settings like stack and model */}
-          <GenerationSettings settings={settings} setSettings={setSettings} />
+          <div className="space-y-4">
+            {/* Prompt Input */}
+            <div>
+              <label htmlFor="description" className="block text-lg font-medium mb-2">
+                Website Description
+              </label>
+              <textarea
+                id="description"
+                rows={6}
+                className="w-full p-3 bg-zinc-800 border border-zinc-600 rounded-md focus:ring-2 focus:ring-indigo-500"
+                placeholder="e.g., A modern landing page for a new SaaS product..."
+                value={description}
+                onChange={(e) => setDescription(e.target.value)}
+              />
+            </div>
 
-          {/* Show auto updated message when older models are choosen */}
-          {showBetterModelMessage && <DeprecationMessage />}
+            {/* Model Selection */}
+            <div>
+              <label htmlFor="model" className="block text-lg font-medium mb-2">
+                Choose a Model
+              </label>
+              <select
+                id="model"
+                className="w-full p-3 bg-zinc-800 border border-zinc-600 rounded-md focus:ring-2 focus:ring-indigo-500"
+                value={model}
+                onChange={(e) => setModel(e.target.value as CodeGenerationModel)}
+              >
+                <option value={CodeGenerationModel.GPT_OSS_20B}>gpt-oss-20b</option>
+                <option value={CodeGenerationModel.LLAMA3_2_3B}>llama3.2:3b</option>
+              </select>
+            </div>
 
-          {/* Show tip link until coding is complete */}
-          {/* {appState !== AppState.CODE_READY && <TipLink />} */}
-
-          {IS_RUNNING_ON_CLOUD && !settings.openAiApiKey && <OnboardingNote />}
-
-          {/* Connectivity status */}
-          <div className="text-xs mt-2">
-            Backend: {backendOk === null ? "checking..." : backendOk ? "connected" : "not reachable"}
-          </div>
-
-          {/* Simple local HTML generation test */}
-          <div className="mt-3 p-3 border rounded">
-            <div className="font-medium mb-2">Quick Local Test (Ollama HTML)</div>
-            <input
-              className="w-full border rounded p-2 text-black"
-              placeholder="Describe a simple landing page..."
-              value={testDescription}
-              onChange={(e) => setTestDescription(e.target.value)}
-            />
+            {/* Generate Button */}
             <button
-              className="mt-2 px-3 py-1 border rounded"
-              onClick={async () => {
-                setTestResult("");
-                try {
-                  console.log("POST /api/ollama/generate/html", { description: testDescription });
-                  const res = await fetch(`${HTTP_BACKEND_URL}/api/ollama/generate/html`, {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ description: testDescription, additional_requirements: "", model_name: null }),
-                  });
-                  const data = await res.json();
-                  console.log("/generate/html response:", data);
-                  if (data?.success && data?.data?.html) {
-                    setTestResult(data.data.html);
-                  } else {
-                    setTestResult(`Error: ${data?.error || res.statusText}`);
-                  }
-                } catch (e: any) {
-                  console.error(e);
-                  setTestResult(`Request failed: ${e?.message || e}`);
-                }
-              }}
+              onClick={handleGenerate}
+              disabled={status === "loading" || !backendHealth}
+              className="w-full py-3 px-4 bg-indigo-600 rounded-md text-lg font-semibold hover:bg-indigo-700 disabled:bg-zinc-700 disabled:cursor-not-allowed transition-colors"
             >
-              Generate HTML
+              {status === "loading" ? "Generating..." : "Generate Website"}
             </button>
-            <div className="mt-2 text-xs opacity-80">Logs in console</div>
-            {testResult && (
-              <div className="mt-3 border rounded bg-white text-black p-3 whitespace-pre-wrap overflow-auto max-h-72">
-                {testResult}
+          </div>
+
+          {status === "error" && (
+            <div className="p-4 bg-red-900 border border-red-700 rounded-md">
+              <h3 className="font-bold text-red-300">Error</h3>
+              <p className="text-red-400 mt-1">{error}</p>
+            </div>
+          )}
+        </div>
+
+        {/* Preview Pane */}
+        <div className="flex-1 flex flex-col bg-zinc-950">
+          <div className="p-4 border-b border-zinc-700">
+            <h2 className="text-xl font-semibold">Preview</h2>
+          </div>
+          <div className="flex-1 bg-white">
+            {status === "initial" && (
+              <div className="flex items-center justify-center h-full text-zinc-500">
+                Enter a description and click "Generate" to see the preview.
+              </div>
+            )}
+            {status === "loading" && (
+              <div className="flex items-center justify-center h-full text-zinc-500">
+                <p>Generating your website...</p>
+              </div>
+            )}
+            {status === "ready" && (
+              <iframe
+                title="Generated Website Preview"
+                className="w-full h-full border-0"
+                srcDoc={createPreviewHtml()}
+              />
+            )}
+            {status === "error" && (
+               <div className="flex items-center justify-center h-full text-red-500">
+                <p>Could not generate website due to an error.</p>
               </div>
             )}
           </div>
-
-          {appState === AppState.INITIAL && (
-            <GenerateFromText doCreateFromText={doCreateFromText} />
-          )}
-
-          {/* Rest of the sidebar when we're not in the initial state */}
-          {(appState === AppState.CODING ||
-            appState === AppState.CODE_READY) && (
-            <Sidebar
-              showSelectAndEditFeature={showSelectAndEditFeature}
-              doUpdate={doUpdate}
-              regenerate={regenerate}
-              cancelCodeGeneration={cancelCodeGeneration}
-            />
-          )}
         </div>
       </div>
-
-      <main className="py-2 lg:pl-96">
-        {appState === AppState.INITIAL && (
-          <StartPane
-            doCreate={doCreate}
-            importFromCode={importFromCode}
-            settings={settings}
-          />
-        )}
-
-        {(appState === AppState.CODING || appState === AppState.CODE_READY) && (
-          <PreviewPane doUpdate={doUpdate} reset={reset} settings={settings} />
-        )}
-      </main>
-    </div>
+    </>
   );
 }
 
