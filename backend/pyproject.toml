@@ -11,21 +11,12 @@ python = "^3.10"
 fastapi = "^0.115.6"
 uvicorn = {extras = ["standard"], version = "^0.32.1"}
 websockets = "^14.1"
-python-dotenv = "^1.0.1"
 beautifulsoup4 = "^4.12.3"
 httpx = "^0.28.1"
 aiohttp = "^3.10.11"
 pydantic = "^2.10.2"
 pillow = "^11.0.0"
-types-pillow = "^10.2.0.20241106"
-# Optional cloud AI dependencies (only install if needed)
-openai = {version = "^1.54.4", optional = true}
-anthropic = {version = "^0.51.0", optional = true}
-google-genai = {version = "^1.16.1", optional = true}
-# Optional monitoring
-langfuse = {version = "^3.0.2", optional = true}
-# Optional video processing
-moviepy = {version = "^1.0.3", optional = true}
+types-pillow = "*"
 # Development tools
 pre-commit = {version = "^4.0.1", optional = true}
 
@@ -38,11 +29,8 @@ isort = "^5.13.2"
 flake8 = "^7.1.1"
 
 [tool.poetry.extras]
-cloud = ["openai", "anthropic", "google-genai"]
-monitoring = ["langfuse"]
-video = ["moviepy"]
 dev = ["pre-commit"]
-all = ["openai", "anthropic", "google-genai", "langfuse", "moviepy", "pre-commit"]
+all = ["pre-commit"]
 
 [build-system]
 requires = ["poetry-core"]
