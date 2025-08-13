@@ -1,213 +1,164 @@
 """
-Comprehensive Ollama client for local LLM integration with the website builder.
-Supports streaming responses, multiple models, and robust error handling.
-"""
+Hardened Ollama client for local-only LLM integration.
 
+This client is specifically designed to work with a local Ollama instance
+and a fixed set of required models. It performs strict checks on startup
+to ensure the environment is correctly configured.
+"""
 import asyncio
 import json
-import time
 from typing import AsyncGenerator, List, Dict, Any, Optional
 import httpx
-
-from config import OLLAMA_BASE_URL, OLLAMA_MODEL_NAME, SUPPORTED_OLLAMA_MODELS
 from pydantic import BaseModel
+
+from config import OLLAMA_BASE_URL, OLLAMA_MODEL_NAME, REQUIRED_OLLAMA_MODELS
+
+# --- Data Models ---
 
 class Completion(BaseModel):
     content: Optional[str] = None
 
-class OllamaConnectionError(Exception):
-    """Raised when Ollama server is not accessible"""
-    pass
+class ChatMessage(BaseModel):
+    role: str
+    content: Any
 
+class ModelStatus(BaseModel):
+    name: str
+    available: bool
+
+# --- Custom Exceptions ---
+
+class OllamaConnectionError(Exception):
+    """Raised when the Ollama server is not accessible."""
+    pass
 
 class OllamaModelError(Exception):
-    """Raised when specified model is not available"""
+    """Raised when a required model is not available in Ollama."""
     pass
 
-
-# Generic message type for LLM interactions
-ChatMessage = Dict[str, Any]
-
+# --- Ollama Client ---
 
 class OllamaClient:
-    """Enhanced client for interacting with Ollama API with comprehensive error handling"""
-    
+    """
+    A client for interacting with a local Ollama API, hardened for local-only operation.
+    It performs a connection check and model validation upon initialization.
+    """
     def __init__(self, base_url: str = OLLAMA_BASE_URL, timeout: float = 300.0):
+        if not base_url.startswith("http://localhost") and not base_url.startswith("http://127.0.0.1"):
+            raise OllamaConnectionError(
+                f"Security risk: OLLAMA_BASE_URL is not set to a local address. Got: {base_url}"
+            )
         self.base_url = base_url.rstrip('/')
         self.timeout = timeout
-        self.model_name = OLLAMA_MODEL_NAME  # Default model name
+        self.model_name = OLLAMA_MODEL_NAME
         self.client = httpx.AsyncClient(timeout=timeout)
-        self._available_models = None
-    
-    async def close(self):
-        """Close the HTTP client"""
-        await self.client.aclose()
-    
-    async def check_connection(self) -> bool:
-        """Check if Ollama server is running and accessible"""
+        self.model_status: List[ModelStatus] = []
+
+    async def initialize(self):
+        """
+        Performs startup checks for connection and model availability.
+        This must be called after creating an instance of the client.
+        """
+        await self._check_connection()
+        await self._check_required_models()
+
+    async def _check_connection(self):
+        """
+        Verifies that the Ollama server is running and accessible.
+        Raises OllamaConnectionError if the connection fails.
+        """
         try:
             response = await self.client.get(f"{self.base_url}/api/version", timeout=5.0)
-            return response.status_code == 200
-        except Exception as e:
-            print(f"Ollama connection check failed: {e}")
-            return False
-    
-    async def list_models(self) -> List[str]:
-        """Get list of available models from Ollama"""
+            response.raise_for_status()
+        except httpx.RequestError as e:
+            raise OllamaConnectionError(
+                "Cannot connect to Ollama server. Please ensure Ollama is running at "
+                f"{self.base_url}. You can start it with: `ollama serve`"
+            ) from e
+
+    async def _check_required_models(self):
+        """
+        Checks if all models specified in REQUIRED_OLLAMA_MODELS are available.
+        Populates `self.model_status` and raises OllamaModelError if any are missing.
+        """
         try:
             response = await self.client.get(f"{self.base_url}/api/tags", timeout=10.0)
-            if response.status_code == 200:
-                data = response.json()
-                models = [model["name"] for model in data.get("models", [])]
-                self._available_models = models
-                return models
-            else:
-                raise OllamaConnectionError(f"Failed to list models: {response.status_code}")
+            response.raise_for_status()
+            data = response.json()
+            available_models = {model["name"] for model in data.get("models", [])}
+
+            missing_models = []
+            for model_name in REQUIRED_OLLAMA_MODELS:
+                is_available = model_name in available_models
+                self.model_status.append(ModelStatus(name=model_name, available=is_available))
+                if not is_available:
+                    missing_models.append(model_name)
+
+            if missing_models:
+                missing_str = ", ".join(missing_models)
+                raise OllamaModelError(
+                    f"The following required models are not available in Ollama: {missing_str}. "
+                    f"Please install them by running `ollama pull {model_name}` for each missing model."
+                )
         except httpx.RequestError as e:
-            raise OllamaConnectionError(f"Cannot connect to Ollama server: {e}")
+            raise OllamaConnectionError("Failed to list models from Ollama server.") from e
     
-    async def ensure_model_available(self, model_name: str) -> bool:
-        """Ensure the specified model is available, with helpful error messages"""
-        if not self._available_models:
-            await self.list_models()
-        
-        if model_name not in self._available_models:
-            available_str = ", ".join(self._available_models) if self._available_models else "none"
-            error_msg = f"""
-Model '{model_name}' not found in Ollama.
-Available models: {available_str}
+    async def list_models(self) -> List[ModelStatus]:
+        """Returns the status of the required models."""
+        return self.model_status
 
-To install the model, run:
-    ollama pull {model_name}
-
-For the recommended models in this project, run:
-    ollama pull llama3.1:3b
-    ollama pull gpt-20b  # if available
-"""
-            raise OllamaModelError(error_msg)
-        return True
-    
     def _format_messages_for_ollama(self, messages: List[ChatMessage]) -> str:
-        """
-        Convert messages to a single prompt string for Ollama's /api/generate.
-        """
+        """Converts messages to a single prompt string for Ollama's /api/generate."""
         prompt_parts = []
         for message in messages:
-            role = message.get("role", "user")
-            content = message.get("content", "")
-
-            # Basic handling for multimodal content, just extracting text
-            if isinstance(content, list):
-                text_content = " ".join(
-                    item.get("text", "")
-                    for item in content if isinstance(item, dict) and item.get("type") == "text"
-                )
-                content = text_content
-
-            prompt_parts.append(f"### {role.capitalize()}\n{content}")
-
-        # Add a final prompt for the assistant to start generating
+            prompt_parts.append(f"### {message.role.capitalize()}\n{message.content}")
         prompt_parts.append("### Assistant\n")
         return "\n\n".join(prompt_parts)
 
-    async def generate_streaming_response(
-        self,
-        messages: List[ChatMessage],
-        model_name: Optional[str] = None,
-        temperature: float = 0.0,
-        max_tokens: Optional[int] = None
-    ) -> AsyncGenerator[str, None]:
-        """
-        Generate streaming response from Ollama model with enhanced error handling
-        """
-        if not model_name:
-            model_name = OLLAMA_MODEL_NAME
-        
-        # Validate connection and model availability
-        if not await self.check_connection():
-            raise OllamaConnectionError(
-                "Cannot connect to Ollama server. Please ensure Ollama is running on " + 
-                f"{self.base_url}. Start with: ollama serve"
-            )
-        
-        await self.ensure_model_available(model_name)
-        
-        # Convert messages to Ollama format  
-        prompt = self._format_messages_for_ollama(messages)
-        
-        print(f"Using Ollama model: {model_name}")
-        
-        # Prepare request payload
-        payload = {
-            "model": model_name,
-            "prompt": prompt,
-            "stream": True,
-            "options": {
-                "temperature": temperature,
-                "num_predict": max_tokens or 4096,  # Default to reasonable limit
-                "stop": ["User:", "Human:"],  # Stop tokens to prevent confusion
-            }
-        }
-        
-        try:
-            async with self.client.stream(
-                "POST",
-                f"{self.base_url}/api/generate",
-                json=payload,
-                timeout=self.timeout
-            ) as response:
-                if response.status_code != 200:
-                    error_text = await response.aread()
-                    raise OllamaConnectionError(
-                        f"Ollama API error {response.status_code}: {error_text.decode()}"
-                    )
-                
-                async for line in response.aiter_lines():
-                    if line.strip():
-                        try:
-                            data = json.loads(line)
-                            
-                            if data.get("error"):
-                                raise OllamaConnectionError(f"Ollama error: {data['error']}")
-                            
-                            if "response" in data:
-                                chunk = data["response"]
-                                if chunk:  # Only yield non-empty chunks
-                                    yield chunk
-                            
-                            # Check if generation is done
-                            if data.get("done", False):
-                                break
-                                
-                        except json.JSONDecodeError as e:
-                            print(f"Failed to parse Ollama response: {line}")
-                            continue
-                            
-        except httpx.TimeoutException:
-            raise OllamaConnectionError(
-                f"Timeout waiting for response from {model_name}. "
-                "This might indicate the model is too large for your system or needs more time."
-            )
-        except httpx.RequestError as e:
-            raise OllamaConnectionError(f"Network error communicating with Ollama: {e}")
-    
     async def generate_completion(
         self,
         messages: List[ChatMessage],
         model_name: Optional[str] = None,
         temperature: float = 0.0,
-        max_tokens: Optional[int] = None
+        max_tokens: Optional[int] = 4096
     ) -> Completion:
         """
-        Generate a complete (non-streaming) response from Ollama
+        Generates a complete (non-streaming) response from Ollama.
         """
-        full_response = ""
-        async for chunk in self.generate_streaming_response(
-            messages, model_name, temperature, max_tokens
-        ):
-            full_response += chunk
-        
-        return Completion(content=full_response)
+        model_to_use = model_name or self.model_name
+        if model_to_use not in REQUIRED_OLLAMA_MODELS:
+            raise OllamaModelError(
+                f"Model '{model_to_use}' is not an approved local model. "
+                f"Please use one of: {', '.join(REQUIRED_OLLAMA_MODELS)}"
+            )
 
-    # This convenience wrapper is no longer needed with the new prompt manager
-    # and can be removed. If streaming is needed again, it can be added back.
+        prompt = self._format_messages_for_ollama(messages)
+        
+        payload = {
+            "model": model_to_use,
+            "prompt": prompt,
+            "stream": False,  # Non-streaming for this method
+            "options": {
+                "temperature": temperature,
+                "num_predict": max_tokens,
+                "stop": ["User:", "Human:", "###"],
+            }
+        }
+        
+        try:
+            response = await self.client.post(
+                f"{self.base_url}/api/generate",
+                json=payload,
+                timeout=self.timeout
+            )
+            response.raise_for_status()
+            data = response.json()
+            return Completion(content=data.get("response", ""))
+        except httpx.TimeoutException as e:
+            raise OllamaConnectionError(f"Timeout waiting for response from {model_to_use}.") from e
+        except httpx.RequestError as e:
+            raise OllamaConnectionError(f"Network error communicating with Ollama: {e}") from e
+
+    async def close(self):
+        """Closes the HTTP client."""
+        await self.client.aclose()

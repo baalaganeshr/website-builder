@@ -6,6 +6,7 @@ from a single description using local Ollama models.
 from typing import Dict, Optional
 import logging
 import re
+from models.ollama_client import ChatMessage
 
 logger = logging.getLogger(__name__)
 
@@ -67,8 +68,8 @@ class WebsitePromptManager:
             # Use the non-streaming completion method for simplicity
             completion = await self.client.generate_completion(
                 messages=[
-                    {"role": "system", "content": self.templates.SYSTEM_PROMPT},
-                    {"role": "user", "content": prompt},
+                    ChatMessage(role="system", content=self.templates.SYSTEM_PROMPT),
+                    ChatMessage(role="user", content=prompt),
                 ],
                 model_name=model_to_use
             )

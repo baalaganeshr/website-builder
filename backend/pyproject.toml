@@ -11,20 +11,14 @@ python = "^3.10"
 fastapi = "^0.115.6"
 uvicorn = {extras = ["standard"], version = "^0.32.1"}
 websockets = "^14.1"
-python-dotenv = "^1.0.1"
 beautifulsoup4 = "^4.12.3"
 httpx = "^0.28.1"
 aiohttp = "^3.10.11"
 pydantic = "^2.10.2"
 pillow = "^11.0.0"
 types-pillow = "*"
-# Optional monitoring
-langfuse = {version = "^3.0.2", optional = true}
-# Optional video processing
-moviepy = {version = "^1.0.3", optional = true}
 # Development tools
 pre-commit = {version = "^4.0.1", optional = true}
-re_assert = "^1.1.0"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.3.4"
@@ -35,10 +29,8 @@ isort = "^5.13.2"
 flake8 = "^7.1.1"
 
 [tool.poetry.extras]
-monitoring = ["langfuse"]
-video = ["moviepy"]
 dev = ["pre-commit"]
-all = ["langfuse", "moviepy", "pre-commit"]
+all = ["pre-commit"]
 
 [build-system]
 requires = ["poetry-core"]
