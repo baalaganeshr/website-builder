@@ -1,30 +1,29 @@
-# Useful for debugging purposes when you don't want to waste GPT4-Vision credits
-# Setting to True will stream a mock response instead of calling the OpenAI API
+"""
+Configuration file for the Local-Only AI Website Builder.
+
+This file hardcodes the required settings to ensure the application runs in a
+strictly local environment, connecting only to a local Ollama instance.
+"""
 import os
 
-NUM_VARIANTS = 4
+# --- Hardcoded Local Ollama Configuration ---
+# The base URL for the local Ollama server. This is not configurable.
+OLLAMA_BASE_URL = "http://localhost:11434"
 
-# LLM-related
-OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", None)
-ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", None)
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", None)
-OPENAI_BASE_URL = os.environ.get("OPENAI_BASE_URL", None)
+# The specific local models required for this application to run.
+REQUIRED_OLLAMA_MODELS = ["gpt-oss-20b", "llama3.2:3b"]
 
-# Ollama-related - Updated with exact model names specified by user
-OLLAMA_BASE_URL = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
-OLLAMA_MODEL_NAME = os.getenv("OLLAMA_MODEL_NAME", "llama3.2:3b")  # Default to specified model
+# The default model to use if none is specified by the frontend.
+OLLAMA_MODEL_NAME = "llama3.2:3b"
 
-# Supported Ollama models - exact names as specified
-SUPPORTED_OLLAMA_MODELS = ["gpt-oss-20b", "llama3.2:3b"]
 
-# Image generation (optional)
-REPLICATE_API_KEY = os.environ.get("REPLICATE_API_KEY", None)
+# --- Deprecated or Unused Settings ---
+# All cloud-based API keys and settings are removed to enforce local-only operation.
+# Any logic attempting to use these should be removed or updated.
 
-# Debugging-related
-SHOULD_MOCK_AI_RESPONSE = bool(os.environ.get("MOCK", False))
+# --- Debugging-related ---
+# For development and debugging purposes only.
 IS_DEBUG_ENABLED = bool(os.environ.get("IS_DEBUG_ENABLED", False))
 DEBUG_DIR = os.environ.get("DEBUG_DIR", "")
-
-# Set to True when running in production (on the hosted version)
-# Used as a feature flag to enable or disable certain features
-IS_PROD = os.environ.get("IS_PROD", False)
+IS_PROD = False # This is a local-only application, so IS_PROD is always False.
+SHOULD_MOCK_AI_RESPONSE = True # Mocks are enabled for testing without Ollama.

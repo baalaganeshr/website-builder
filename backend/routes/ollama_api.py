@@ -1,43 +1,47 @@
 """
-Simplified API routes for website generation using a local Ollama model.
+Hardened, simplified API routes for local-only website generation.
 """
-
 import logging
-from typing import Optional, Dict, Any
-from fastapi import APIRouter, HTTPException
+from typing import Optional, List
+from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel, Field
-from models.ollama_client import OllamaClient, OllamaConnectionError, OllamaModelError
+import re
+
+from models.ollama_client import OllamaClient, OllamaConnectionError, OllamaModelError, ModelStatus
 from services.prompt_manager import WebsitePromptManager
-from config import OLLAMA_BASE_URL, OLLAMA_MODEL_NAME, SUPPORTED_OLLAMA_MODELS
+from config import OLLAMA_BASE_URL, OLLAMA_MODEL_NAME, REQUIRED_OLLAMA_MODELS, SHOULD_MOCK_AI_RESPONSE
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-# Globals for singletons
-ollama_client: Optional[OllamaClient] = None
-prompt_manager: Optional[WebsitePromptManager] = None
+# --- Singleton Management ---
+
+ollama_client_singleton: Optional[OllamaClient] = None
 
 async def get_ollama_client() -> OllamaClient:
-    """Get or create Ollama client singleton."""
-    global ollama_client
-    if ollama_client is None:
-        ollama_client = OllamaClient(base_url=OLLAMA_BASE_URL)
-        await ollama_client.check_connection()
-    return ollama_client
+    """
+    Dependency injection function to get the Ollama client singleton.
+    Initializes the client on first call.
+    """
+    global ollama_client_singleton
+    if ollama_client_singleton is None:
+        try:
+            ollama_client_singleton = OllamaClient(base_url=OLLAMA_BASE_URL)
+            await ollama_client_singleton.initialize()
+        except (OllamaConnectionError, OllamaModelError) as e:
+            # This error will be caught by the health check on startup.
+            # Logging it here is useful for debugging.
+            logger.critical(f"Failed to initialize Ollama client: {e}")
+            # The app won't be able to serve requests, but we don't raise here
+            # to allow the health check endpoint to report the specific error.
+    return ollama_client_singleton
 
-async def get_prompt_manager() -> WebsitePromptManager:
-    """Get or create prompt manager singleton."""
-    global prompt_manager
-    if prompt_manager is None:
-        client = await get_ollama_client()
-        prompt_manager = WebsitePromptManager(client)
-    return prompt_manager
+# --- Pydantic Models ---
 
-# Pydantic models for the simplified API
 class GenerateWebsiteRequest(BaseModel):
     description: str = Field(..., description="A description of the website to generate.")
-    model_name: Optional[str] = Field(OLLAMA_MODEL_NAME, description="The Ollama model to use for generation.")
+    model_name: str = Field(OLLAMA_MODEL_NAME, description="The Ollama model to use for generation.")
 
 class GenerateWebsiteResponse(BaseModel):
     html: str
@@ -47,41 +51,63 @@ class GenerateWebsiteResponse(BaseModel):
 class HealthResponse(BaseModel):
     status: str
     ollama_url: str
-    available_models: list[str]
-    supported_models: list[str]
+    models: List[ModelStatus]
+
+# --- API Endpoints ---
 
 @router.get("/health", response_model=HealthResponse)
-async def health_check():
-    """Check if the API and the Ollama service are running."""
+async def health_check(client: OllamaClient = Depends(get_ollama_client)):
+    """
+    Checks the connection to Ollama and verifies that required models are available.
+    This endpoint is used by the frontend to determine if the app is ready.
+    """
+    if not client:
+         raise HTTPException(
+            status_code=503,
+            detail="Ollama client could not be initialized. Check server logs for details."
+        )
     try:
-        client = await get_ollama_client()
-        models = await client.list_models()
+        # Re-run checks to get fresh status
+        await client.initialize()
         return HealthResponse(
             status="healthy",
             ollama_url=OLLAMA_BASE_URL,
-            available_models=models,
-            supported_models=SUPPORTED_OLLAMA_MODELS,
+            models=client.model_status,
         )
-    except OllamaConnectionError as e:
+    except (OllamaConnectionError, OllamaModelError) as e:
         logger.error(f"Health check failed: {e}")
-        raise HTTPException(status_code=503, detail=f"Ollama connection error: {e}")
-    except Exception as e:
-        logger.error(f"An unexpected error occurred during health check: {e}")
-        raise HTTPException(status_code=500, detail="An internal server error occurred.")
+        raise HTTPException(status_code=503, detail=str(e))
+
 
 @router.post("/generate/html", response_model=GenerateWebsiteResponse)
-async def generate_website(request: GenerateWebsiteRequest):
+async def generate_website(
+    request: GenerateWebsiteRequest,
+    client: OllamaClient = Depends(get_ollama_client)
+):
     """
-    Generates a complete HTML page with CSS from a description.
+    Generates a complete HTML page with CSS from a description, using a validated local model.
     """
+    if SHOULD_MOCK_AI_RESPONSE:
+        logger.info("SHOULD_MOCK_AI_RESPONSE is True, returning mock data.")
+        mock_html = """<!DOCTYPE html><html lang="en"><head><title>Mock Page</title><link rel="stylesheet" href="style.css"></head><body><h1>Hello, Mock World!</h1></body></html>"""
+        mock_css = """body { font-family: sans-serif; } h1 { color: blue; }"""
+        return GenerateWebsiteResponse(html=mock_html, css=mock_css, status="success")
+
+    if not client:
+        raise HTTPException(status_code=503, detail="Application is not healthy. Cannot process requests.")
+
+    if request.model_name not in REQUIRED_OLLAMA_MODELS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid model requested. Only the following models are allowed: {', '.join(REQUIRED_OLLAMA_MODELS)}"
+        )
+
     try:
-        manager = await get_prompt_manager()
-        model_to_use = request.model_name or OLLAMA_MODEL_NAME
-        
-        # This is a new method I will need to implement in the prompt manager
-        generated_code = await manager.generate_website_from_description(
+        # The prompt manager now simply orchestrates the call.
+        prompt_manager = WebsitePromptManager(client)
+        generated_code = await prompt_manager.generate_website_from_description(
             description=request.description,
-            model_name=model_to_use
+            model_name=request.model_name
         )
         
         return GenerateWebsiteResponse(
@@ -89,8 +115,8 @@ async def generate_website(request: GenerateWebsiteRequest):
             css=generated_code.get("css", "")
         )
     except (OllamaConnectionError, OllamaModelError) as e:
-        logger.error(f"Ollama service error: {e}")
+        logger.error(f"Ollama service error during generation: {e}")
         raise HTTPException(status_code=503, detail=str(e))
     except Exception as e:
-        logger.error(f"Error generating website: {e}")
-        raise HTTPException(status_code=500, detail="Failed to generate website.")
+        logger.error(f"An unexpected error occurred during website generation: {e}")
+        raise HTTPException(status_code=500, detail="An internal server error occurred.")

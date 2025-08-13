@@ -1,59 +1,61 @@
 import { useState, useEffect } from "react";
 import { Toaster, toast } from "react-hot-toast";
 import { HTTP_BACKEND_URL } from "./config";
-import { CodeGenerationModel } from "./lib/models"; // Using existing model definitions
+import { CodeGenerationModel } from "./lib/models";
 
-// Simplified component state
-type AppStatus = "initial" | "loading" | "ready" | "error";
+// --- Types ---
+
+type AppStatus = "initializing" | "ready" | "loading" | "error";
+
+interface ModelStatus {
+  name: string;
+  available: boolean;
+}
+
+interface HealthStatus {
+  status: "healthy" | "unhealthy";
+  ollama_url: string;
+  models: ModelStatus[];
+}
+
+// --- Main App Component ---
 
 function App() {
+  // Component State
   const [description, setDescription] = useState<string>("");
   const [model, setModel] = useState<CodeGenerationModel>(CodeGenerationModel.LLAMA3_2_3B);
   const [generatedHtml, setGeneratedHtml] = useState<string>("");
   const [generatedCss, setGeneratedCss] = useState<string>("");
-  const [status, setStatus] = useState<AppStatus>("initial");
+  const [status, setStatus] = useState<AppStatus>("initializing");
+  const [health, setHealth] = useState<HealthStatus | null>(null);
   const [error, setError] = useState<string>("");
-  const [backendHealth, setBackendHealth] = useState<boolean | null>(null);
 
-  // Check backend health on component mount
+  const isBackendHealthy = health?.status === "healthy";
+  const areModelsReady = health?.models.every(m => m.available) ?? false;
+  const canGenerate = isBackendHealthy && areModelsReady && status !== "loading";
+
+  // --- Effects ---
+
   useEffect(() => {
     const checkHealth = async () => {
+      setStatus("initializing");
       try {
         const response = await fetch(`${HTTP_BACKEND_URL}/api/ollama/health`);
-        if (response.ok) {
-          const data = await response.json();
-          setBackendHealth(data.status === "healthy");
-        } else {
-          setBackendHealth(false);
+        const data = await response.json();
+        if (!response.ok) {
+          throw new Error(data.detail || "The backend is not reachable.");
         }
-      } catch (err) {
-        setBackendHealth(false);
+        setHealth(data);
+        setStatus("ready");
+      } catch (err: any) {
+        setError(err.message || "An unknown error occurred while checking backend health.");
+        setStatus("error");
       }
     };
     checkHealth();
   }, []);
 
-  // Function to construct the preview HTML
-  const createPreviewHtml = () => {
-    if (!generatedHtml) return "";
-    return `
-      <!DOCTYPE html>
-      <html lang="en">
-      <head>
-        <meta charset="UTF-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>Generated Website</title>
-        <style>
-          body { font-family: sans-serif; }
-          ${generatedCss}
-        </style>
-      </head>
-      <body>
-        ${generatedHtml}
-      </body>
-      </html>
-    `;
-  };
+  // --- Event Handlers ---
 
   const handleGenerate = async () => {
     if (!description.trim()) {
@@ -65,20 +67,19 @@ function App() {
     setError("");
     setGeneratedHtml("");
     setGeneratedCss("");
+    toast.loading("Generating your website...");
 
     try {
       const response = await fetch(`${HTTP_BACKEND_URL}/api/ollama/generate/html`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          description: description,
-          model_name: model,
-        }),
+        body: JSON.stringify({ description, model_name: model }),
       });
 
+      toast.dismiss();
       if (!response.ok) {
         const errorData = await response.json();
-        throw new Error(errorData.detail || `HTTP error! Status: ${response.status}`);
+        throw new Error(errorData.detail || `An API error occurred: ${response.statusText}`);
       }
 
       const data = await response.json();
@@ -87,78 +88,119 @@ function App() {
       setStatus("ready");
       toast.success("Website generated successfully!");
     } catch (err: any) {
-      setError(err.message || "An unknown error occurred.");
+      toast.dismiss();
+      setError(err.message || "An unknown error occurred during generation.");
       setStatus("error");
       toast.error(err.message || "Failed to generate website.");
     }
   };
+
+  // --- Render Helpers ---
+
+  const createPreviewHtml = () => {
+    if (!generatedHtml) return "";
+    return `
+      <!DOCTYPE html><html lang="en">
+      <head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <title>Generated Website</title><style>body{font-family:sans-serif;}${generatedCss}</style></head>
+      <body>${generatedHtml}</body></html>`;
+  };
+
+  const renderModelStatus = () => {
+    if (status === 'initializing') return <p className="text-zinc-400">Checking model status...</p>;
+    if (status === 'error' || !health) return null;
+
+    return health.models.map(m => (
+      <div key={m.name} className="flex items-center space-x-2">
+        {m.available ? (
+          <span className="text-green-400">✓</span>
+        ) : (
+          <span className="text-red-400">✗</span>
+        )}
+        <span className={m.available ? 'text-zinc-300' : 'text-zinc-500'}>{m.name}</span>
+        {!m.available && <span className="text-xs text-red-400">(Not installed in Ollama)</span>}
+      </div>
+    ));
+  }
+
+  // --- Main Render ---
 
   return (
     <>
       <Toaster position="top-center" />
       <div className="flex h-screen bg-zinc-900 text-white">
         {/* Control Panel */}
-        <div className="w-1/3 max-w-lg p-6 space-y-6 overflow-y-auto border-r border-zinc-700">
+        <div className="w-1/3 max-w-lg p-6 flex flex-col space-y-6 overflow-y-auto border-r border-zinc-700">
           <header>
             <h1 className="text-3xl font-bold">Local AI Website Builder</h1>
-            <p className="text-zinc-400 mt-2">
-              Describe the website you want to create, and let a local Ollama model build it for you.
-            </p>
-            <div className="text-xs mt-3">
-              Backend status: {backendHealth === null ? "checking..." : backendHealth ?
-              <span className="text-green-400">connected</span> :
-              <span className="text-red-400">disconnected</span>}
+            <div className="flex items-center space-x-2 mt-2">
+              <span className="inline-block px-2 py-1 text-xs font-semibold text-green-200 bg-green-800 rounded-full">
+                Local AI Only
+              </span>
+              <span className="inline-block px-2 py-1 text-xs font-semibold text-zinc-300 bg-zinc-700 rounded-full">
+                Offline Mode
+              </span>
             </div>
           </header>
 
-          <div className="space-y-4">
-            {/* Prompt Input */}
+          <div className="p-4 bg-zinc-800 rounded-lg border border-zinc-700">
+            <h2 className="text-lg font-semibold mb-3">System Status</h2>
+            <div className="space-y-2 text-sm">
+              <p>Ollama: {isBackendHealthy ?
+                <span className="text-green-400">Connected</span> :
+                <span className="text-red-400">Disconnected</span>}
+              </p>
+              {renderModelStatus()}
+            </div>
+          </div>
+
+          {status === "error" && (
+            <div className="p-4 bg-red-900/50 border border-red-700 rounded-lg">
+              <h3 className="font-bold text-red-300">System Error</h3>
+              <p className="text-red-400 mt-1 text-sm">{error}</p>
+              <button onClick={() => window.location.reload()} className="mt-3 text-xs text-zinc-300 underline">
+                Click to refresh
+              </button>
+            </div>
+          )}
+
+          <div className="flex-grow space-y-4">
             <div>
-              <label htmlFor="description" className="block text-lg font-medium mb-2">
-                Website Description
-              </label>
+              <label htmlFor="description" className="block text-lg font-medium mb-2">Website Description</label>
               <textarea
                 id="description"
                 rows={6}
-                className="w-full p-3 bg-zinc-800 border border-zinc-600 rounded-md focus:ring-2 focus:ring-indigo-500"
+                className="w-full p-3 bg-zinc-800 border border-zinc-600 rounded-md focus:ring-2 focus:ring-indigo-500 disabled:opacity-50"
                 placeholder="e.g., A modern landing page for a new SaaS product..."
                 value={description}
                 onChange={(e) => setDescription(e.target.value)}
+                disabled={!canGenerate}
               />
             </div>
 
-            {/* Model Selection */}
             <div>
-              <label htmlFor="model" className="block text-lg font-medium mb-2">
-                Choose a Model
-              </label>
+              <label htmlFor="model" className="block text-lg font-medium mb-2">Choose a Model</label>
               <select
                 id="model"
-                className="w-full p-3 bg-zinc-800 border border-zinc-600 rounded-md focus:ring-2 focus:ring-indigo-500"
+                className="w-full p-3 bg-zinc-800 border border-zinc-600 rounded-md focus:ring-2 focus:ring-indigo-500 disabled:opacity-50"
                 value={model}
                 onChange={(e) => setModel(e.target.value as CodeGenerationModel)}
+                disabled={!canGenerate}
               >
-                <option value={CodeGenerationModel.GPT_OSS_20B}>gpt-oss-20b</option>
-                <option value={CodeGenerationModel.LLAMA3_2_3B}>llama3.2:3b</option>
+                {health?.models.filter(m => m.available).map(m => (
+                  <option key={m.name} value={m.name}>{m.name}</option>
+                ))}
               </select>
             </div>
 
-            {/* Generate Button */}
             <button
               onClick={handleGenerate}
-              disabled={status === "loading" || !backendHealth}
+              disabled={!canGenerate}
               className="w-full py-3 px-4 bg-indigo-600 rounded-md text-lg font-semibold hover:bg-indigo-700 disabled:bg-zinc-700 disabled:cursor-not-allowed transition-colors"
             >
               {status === "loading" ? "Generating..." : "Generate Website"}
             </button>
           </div>
-
-          {status === "error" && (
-            <div className="p-4 bg-red-900 border border-red-700 rounded-md">
-              <h3 className="font-bold text-red-300">Error</h3>
-              <p className="text-red-400 mt-1">{error}</p>
-            </div>
-          )}
         </div>
 
         {/* Preview Pane */}
@@ -167,28 +209,11 @@ function App() {
             <h2 className="text-xl font-semibold">Preview</h2>
           </div>
           <div className="flex-1 bg-white">
-            {status === "initial" && (
-              <div className="flex items-center justify-center h-full text-zinc-500">
-                Enter a description and click "Generate" to see the preview.
-              </div>
-            )}
-            {status === "loading" && (
-              <div className="flex items-center justify-center h-full text-zinc-500">
-                <p>Generating your website...</p>
-              </div>
-            )}
-            {status === "ready" && (
-              <iframe
-                title="Generated Website Preview"
-                className="w-full h-full border-0"
-                srcDoc={createPreviewHtml()}
-              />
-            )}
-            {status === "error" && (
-               <div className="flex items-center justify-center h-full text-red-500">
-                <p>Could not generate website due to an error.</p>
-              </div>
-            )}
+            {status === "loading" && <div className="flex items-center justify-center h-full text-zinc-500">Generating...</div>}
+            {status !== "loading" && generatedHtml && <iframe title="Preview" className="w-full h-full border-0" srcDoc={createPreviewHtml()} />}
+            {status !== "loading" && !generatedHtml && <div className="flex items-center justify-center h-full text-zinc-500 p-8 text-center">
+              {status === 'error' ? 'Could not generate website due to an error.' : 'Enter a description and click "Generate" to see the preview.'}
+            </div>}
           </div>
         </div>
       </div>
