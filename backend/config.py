@@ -11,7 +11,7 @@ import os
 OLLAMA_BASE_URL = "http://localhost:11434"
 
 # The specific local models required for this application to run.
-REQUIRED_OLLAMA_MODELS = ["gpt-oss-20b", "llama3.2:3b"]
+REQUIRED_OLLAMA_MODELS = ["llama3.2:3b"]
 
 # The default model to use if none is specified by the frontend.
 OLLAMA_MODEL_NAME = "llama3.2:3b"
@@ -26,4 +26,4 @@ OLLAMA_MODEL_NAME = "llama3.2:3b"
 IS_DEBUG_ENABLED = bool(os.environ.get("IS_DEBUG_ENABLED", False))
 DEBUG_DIR = os.environ.get("DEBUG_DIR", "")
 IS_PROD = False # This is a local-only application, so IS_PROD is always False.
-SHOULD_MOCK_AI_RESPONSE = True # Mocks are enabled for testing without Ollama.
+SHOULD_MOCK_AI_RESPONSE = False # Mocks are enabled for testing without Ollama.

@@ -17,25 +17,22 @@ router = APIRouter()
 
 # --- Singleton Management ---
 
-ollama_client_singleton: Optional[OllamaClient] = None
-
 async def get_ollama_client() -> OllamaClient:
     """
-    Dependency injection function to get the Ollama client singleton.
-    Initializes the client on first call.
+    Dependency injection function to get a new Ollama client.
+    This ensures the latest configuration is used on each request.
     """
-    global ollama_client_singleton
-    if ollama_client_singleton is None:
-        try:
-            ollama_client_singleton = OllamaClient(base_url=OLLAMA_BASE_URL)
-            await ollama_client_singleton.initialize()
-        except (OllamaConnectionError, OllamaModelError) as e:
-            # This error will be caught by the health check on startup.
-            # Logging it here is useful for debugging.
-            logger.critical(f"Failed to initialize Ollama client: {e}")
-            # The app won't be able to serve requests, but we don't raise here
-            # to allow the health check endpoint to report the specific error.
-    return ollama_client_singleton
+    try:
+        client = OllamaClient(base_url=OLLAMA_BASE_URL)
+        await client.initialize()
+        return client
+    except (OllamaConnectionError, OllamaModelError) as e:
+        logger.critical(f"Failed to initialize Ollama client: {e}")
+        # Raise a 503 error directly to prevent the app from starting with a bad state.
+        raise HTTPException(
+            status_code=503,
+            detail=f"Failed to initialize or connect with Ollama: {e}"
+        )
 
 # --- Pydantic Models ---
 
